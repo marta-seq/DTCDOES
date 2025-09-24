@@ -182,7 +182,7 @@ def plot_neat1(adata, save_folder=None):
 
 
 def merge_agglomerate_data_with_adata(adata, neat1_df, radius, threshold,
-                                      cell_id_col='cell_ID', fov_col='FOV'):
+                                      cell_id_col=None, fov_col='FOV'):
     """
     Merge NEAT1 agglomerate data with AnnData object
 
@@ -197,8 +197,8 @@ def merge_agglomerate_data_with_adata(adata, neat1_df, radius, threshold,
         Radius parameter used in analysis (for column naming)
     threshold : int
         Threshold parameter used in analysis (for column naming)
-    cell_id_col : str
-        Column name for cell ID in adata.obs
+    cell_id_col : str or None
+        Column name for cell ID in adata.obs. If None, uses adata.obs.index
     fov_col : str
         Column name for FOV in adata.obs
 
@@ -210,6 +210,7 @@ def merge_agglomerate_data_with_adata(adata, neat1_df, radius, threshold,
     print(f"Merging NEAT1 agglomerate data (r={radius}, th={threshold})")
     print(f"NEAT1 data shape: {neat1_df.shape}")
     print(f"AnnData shape: {adata.shape}")
+    print(f"Available adata.obs columns: {list(adata.obs.columns)}")
 
     # Create column names with parameters
     col_suffix = f"_r{radius}_th{threshold}"
@@ -225,14 +226,18 @@ def merge_agglomerate_data_with_adata(adata, neat1_df, radius, threshold,
     # Add has_aggl column
     neat1_merge[f'has_aggl{col_suffix}'] = neat1_merge[f'n_agglomerates{col_suffix}'] > 0
 
-    # Prepare merge keys
-    # Convert cell_id to string/int as needed to match adata format
-    if cell_id_col in adata.obs.columns:
-        adata_cell_type = adata.obs[cell_id_col].dtype
-        neat1_merge['cell_id'] = neat1_merge['cell_id'].astype(adata_cell_type)
+    # Handle cell ID - use index if cell_id_col is None or doesn't exist
+    if cell_id_col is None or cell_id_col not in adata.obs.columns:
+        print("Using adata.obs.index as cell identifiers")
+        adata_cell_ids = adata.obs.index.astype(str)
+    else:
+        adata_cell_ids = adata.obs[cell_id_col].astype(str)
+
+    # Clean NEAT1 cell_ids (remove .0 suffix as in your code)
+    neat1_merge["cell_id"] = neat1_merge["cell_id"].astype(str).str.replace(r"\.0$", "", regex=True)
 
     # Create merge keys that combine cell_id and fov for unique matching
-    adata.obs['merge_key'] = adata.obs[cell_id_col].astype(str) + "_" + adata.obs[fov_col].astype(str)
+    adata.obs['merge_key'] = adata_cell_ids + "_" + adata.obs[fov_col].astype(str)
     neat1_merge['merge_key'] = neat1_merge['cell_id'].astype(str) + "_" + neat1_merge['fov'].astype(str)
 
     # Check overlap before merge
@@ -246,6 +251,8 @@ def merge_agglomerate_data_with_adata(adata, neat1_df, radius, threshold,
 
     if len(overlap) == 0:
         print("WARNING: No overlapping cells found. Check cell_id and fov column matching.")
+        print(f"Sample adata keys: {list(adata_keys)[:5]}")
+        print(f"Sample NEAT1 keys: {list(neat1_keys)[:5]}")
         return adata
 
     # Merge data
@@ -259,9 +266,11 @@ def merge_agglomerate_data_with_adata(adata, neat1_df, radius, threshold,
     )
 
     # Fill NaN values with 0 for counts and False for has_aggl
-    adata_obs_merged[f'NEAT1_total{col_suffix}'] = adata_obs_merged[f'NEAT1_total{col_suffix}'].fillna(0)
-    adata_obs_merged[f'NEAT1_aggl_mols{col_suffix}'] = adata_obs_merged[f'NEAT1_aggl_mols{col_suffix}'].fillna(0)
-    adata_obs_merged[f'n_agglomerates{col_suffix}'] = adata_obs_merged[f'n_agglomerates{col_suffix}'].fillna(0)
+    adata_obs_merged[f'NEAT1_total{col_suffix}'] = adata_obs_merged[f'NEAT1_total{col_suffix}'].fillna(0).astype(int)
+    adata_obs_merged[f'NEAT1_aggl_mols{col_suffix}'] = adata_obs_merged[f'NEAT1_aggl_mols{col_suffix}'].fillna(
+        0).astype(int)
+    adata_obs_merged[f'n_agglomerates{col_suffix}'] = adata_obs_merged[f'n_agglomerates{col_suffix}'].fillna(0).astype(
+        int)
     adata_obs_merged[f'has_aggl{col_suffix}'] = adata_obs_merged[f'has_aggl{col_suffix}'].fillna(False)
 
     # Update adata.obs
@@ -271,7 +280,7 @@ def merge_agglomerate_data_with_adata(adata, neat1_df, radius, threshold,
     adata.obs = adata.obs.drop('merge_key', axis=1)
 
     # Summary
-    n_with_data = (~adata.obs[f'NEAT1_total{col_suffix}'].isna()).sum()
+    n_with_data = (adata.obs[f'NEAT1_total{col_suffix}'] > 0).sum()
     n_with_aggl = (adata.obs[f'has_aggl{col_suffix}'] == True).sum()
 
     print(f"Successfully merged:")
